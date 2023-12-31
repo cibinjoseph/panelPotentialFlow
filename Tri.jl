@@ -153,13 +153,58 @@ function assignGamma!(s::Surface, gamma)
     s.gamma[idxStart:end] .= gamma
 end
 
+function getTE(s::Surface)
+    # Use max_x based search - not valid for swept geometry
+    np = length(s.mesh.points)
+    # Find max x coordinate
+    max_x = s.mesh.points[1][1]
+    nodeList::Vector{Int} = []
+    for i in 1:np
+        if s.mesh.points[i][1] > max_x
+            max_x = s.mesh.points[i][1]
+            nodeList = [i]
+        elseif abs(s.mesh.points[i][1] - max_x) < 1.0e-6
+            push!(nodeList, i)
+        end
+    end
+
+    # Identify cells that share these nodes
+    cellsTE = zeros(Int, 2*(length(nodeList)-1))
+    cellsU = zeros(Int, length(nodeList)-1)
+    cellsL = zeros(Int, length(nodeList)-1)
+    j = 1
+    for inode=1:length(nodeList)-1
+        for i=1:s.nElem
+            if nodeList[inode] in s.mesh.cells[i]
+                if nodeList[inode+1] in s.mesh.cells[i]
+                    cellsTE[j] = i
+                    j += 1
+                end
+            end
+        end
+    end
+
+    # Identify upper and lower cells based on z value
+    for i in 1:length(cellsTE)
+        crds = s.mesh.points[body.mesh.cells[i]]
+        zs = [crds[1][3], crds[2][3], crds[3][3]]
+        @show zmax = max(zs...)
+        @show zmin = min(zs...)
+    end
+    return nodeList, cellsTE, cellsU, cellsL
+end
+
+function vind_chordwisewake(s::Surface)
+    nodeList = getTE(s)
+    # return vel
+end
+
 # Main program
-body = Surface("airfoilSimple.stl")
+body = Surface("airfoil.stl")
 vinf = [1,0,0]
 RHS = getRHS(body, vinf)
 println("Computing solution ...")
 gamma = solve(body.aic, RHS; isClosed=body.isClosed)
 assignGamma!(body, gamma)
+nodeList, cellsTE, cellsU, cellsL = getTE(body)
 writeMesh(body, "out"; vinf=vinf)
-# # body.writeGrid(vinf, [0,5], [0,5], [0,5], [30, 30, 30], 'grid.tec')
-# body.writeGrid(vinf, [-250, 260], [-560,-70], [-85,420], [30, 30, 30], 'grid.tec')
