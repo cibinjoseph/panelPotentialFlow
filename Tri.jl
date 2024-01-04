@@ -170,8 +170,8 @@ function getTE(s::Surface)
 
     # Identify cells that share these nodes
     cellsTE = zeros(Int, 2*(length(nodeList)-1))
-    cellsU = zeros(Int, length(nodeList)-1)
-    cellsL = zeros(Int, length(nodeList)-1)
+    cellsU::Vector{Int} = []
+    cellsL::Vector{Int} = []
     j = 1
     for inode=1:length(nodeList)-1
         for i=1:s.nElem
@@ -184,18 +184,37 @@ function getTE(s::Surface)
         end
     end
 
-    # Identify upper and lower cells based on z value
-    for i in 1:length(cellsTE)
-        crds = s.mesh.points[body.mesh.cells[i]]
-        zs = [crds[1][3], crds[2][3], crds[3][3]]
-        @show zmax = max(zs...)
-        @show zmin = min(zs...)
+    # Identify upper and lower cells based on ncap value
+    zcap = [0, 0, 1.0]
+    for i in cellsTE
+        zcomp = dot(s.mesh.normals[i], zcap)
+        if zcomp > 0.0
+            push!(cellsU, i)
+        else
+            push!(cellsL, i)
+        end
     end
     return nodeList, cellsTE, cellsU, cellsL
 end
 
-function vind_chordwisewake(s::Surface)
-    nodeList = getTE(s)
+function set_horseshoe_tail!(p1, p2, p3, p4; extend=10.0)
+    p1 = p2 .+ [extend*p2[1], 0.0, 0.0]
+    p4 = p3 .+ [extend*p3[1], 0.0, 0.0]
+end
+
+function vind_horseshoe(s::Surface, nodeList)
+    p1 = zeros(3)
+    p2 = zeros(3)
+    p3 = zeros(3)
+    p4 = zeros(3)
+
+    # For each tail segment, set the horseshoe tail and gamma
+    for i=1:length(nodeList)-1
+        p2 .= s.mesh.points[nodeList[i]]
+        p3 .= s.mesh.points[nodeList[i+1]]
+        set_horseshoe_tail!(p1, p2, p3, p4)
+    end
+
     # return vel
 end
 
