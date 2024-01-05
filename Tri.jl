@@ -95,6 +95,8 @@ struct Surface{TI, TF}
     ele::Vector{Tri}
     nElem::TI
     gamma::Vector{TF}
+    coeffP::Vector{TF}
+    vel::Matrix{TF}
     isClosed::Bool
     aic::Matrix{TF}
 end
@@ -122,7 +124,9 @@ function Surface(filename::String; rc=1e-6, isClosed=true, tol=1e-6)
         end
     end
 
-    return Surface(mesh, ele, nElem, gamma, isClosed, aic)
+    coeffP = zeros(nElem)
+    vel = zeros(3, nElem)
+    return Surface(mesh, ele, nElem, gamma, coeffP, vel, isClosed, aic)
 end
 
 function vind(self::Surface, p)
@@ -148,7 +152,7 @@ function vind(hshoes::Vector{Hshoe}, gamma_hshoes::Vector{Float64}, p::Vector{Fl
     return vel
 end
 
-function writeMesh(s::Surface, filename::String, hshoes::Vector{Hshoe}, gamma_hshoes::Vector{Float64}; vinf=zeros(3))
+function writeMesh(s::Surface, filename::String)
     points, cells = getVTKElements(s.mesh)
     ncap = zeros(3, s.nElem)
     cp = zeros(3, s.nElem)
@@ -157,14 +161,14 @@ function writeMesh(s::Surface, filename::String, hshoes::Vector{Hshoe}, gamma_hs
     for i = 1:s.nElem
         ncap[:, i] = s.ele[i].ncap
         cp[:, i] = s.ele[i].cp
-        vel[:, i] = vinf + vind(s, s.ele[i].cp) + vind(hshoes, gamma_hshoes, s.ele[i].cp)
     end
     vtk_grid(filename, points, cells) do vtk
         vtk["gamma"] = s.gamma
         vtk["cell_id"] = id
         vtk["cp", VTKCellData()] = cp
         vtk["ncap", VTKCellData()] = ncap
-        vtk["vel", VTKCellData()] = vel
+        vtk["vel", VTKCellData()] = s.vel
+        vtk["coeffP", VTKCellData()] = s.coeffP
     end
 end
 
@@ -271,6 +275,14 @@ function set!(gamma_hshoes::Vector{Float64}, s::Surface, cellsU, cellsL)
     end
 end
 
+function setLocalVel!(s::Surface, hshoes::Vector{Hshoe}, gamma_hshoes::Vector{Float64}, vinf=Vector{Float64})
+    for i = 1:s.nElem
+        s.vel[:, i] = vinf + vind(s, s.ele[i].cp) + vind(hshoes, gamma_hshoes, s.ele[i].cp)
+        s.coeffP[i] = norm(s.vel[:, i])^2
+    end
+    s.coeffP .= 1.0 .- s.coeffP ./ norm(vinf)^2
+end
+
 # Main program
 body = Surface("airfoil.stl")
 RHS = zeros(body.nElem)
@@ -298,6 +310,6 @@ for iter = 1:50
     if residual < 1e-6; break; end
 end
 
-println("Computing solution ...")
-writeMesh(body, "out", hshoes, gamma_hshoes; vinf=vinf)
+setLocalVel!(body, hshoes, gamma_hshoes, vinf)
+writeMesh(body, "out")
 writeWake(hshoes, gamma_hshoes, "out_wake")
