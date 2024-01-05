@@ -48,6 +48,10 @@ function vindFil(self::Tri, ifil::Int, p::Vector{Float64})
         p2 = self.p[:, 1]
     end
 
+    return vindFil(p1, p2, p, self.rc)
+end
+
+function vindFil(p1::Vector{TF}, p2::Vector{TF}, p::Vector{TF}, rc::TF) where (TF<: Float64)
     r1 = p-p1
     r2 = p-p2
     r0 = r1-r2
@@ -60,9 +64,30 @@ function vindFil(self::Tri, ifil::Int, p::Vector{Float64})
 
     vel = 0.0
     if r1xr2abs2 > eps2
-        vel = (r1xr2*inv4pi*dot(r0, r1Unit-r2Unit)) / sqrt((self.rc*norm(r0))^4.0+r1xr2abs2^2.0)
+        vel = (r1xr2*inv4pi*dot(r0, r1Unit-r2Unit)) / sqrt((rc*norm(r0))^4.0+r1xr2abs2^2.0)
     end
     return vel
+end
+
+struct Hshoe{TF}
+    p::Matrix{TF}
+    rc::TF
+end
+
+""" Constructor """
+function Hshoe(p1, p2, p3, p4, rc)
+    p = zeros(3, 4)
+    p[:, 1] = p1
+    p[:, 2] = p2
+    p[:, 3] = p3
+    p[:, 4] = p4
+    return Hshoe(p, rc)
+end
+
+function vind(self::Hshoe, p)
+    return (vindFil(self.p[:, 1], self.p[:, 2], p, self.rc) +
+            vindFil(self.p[:, 2], self.p[:, 3], p, self.rc) +
+            vindFil(self.p[:, 3], self.p[:, 4], p, self.rc))
 end
 
 struct Surface{TI, TF}
@@ -108,14 +133,21 @@ function vind(self::Surface, p)
     return vel
 end
 
-function getRHS(self::Surface, vinf)
-    RHS = zeros(self.nElem)
-
-    for i in 1:self.nElem
-        RHS[i] = -1 .* dot(vinf, self.ele[i].ncap)
+function set!(RHS::Vector{Float64}, self::Surface, vinf::Vector{Float64}, hshoes::Vector{Hshoe}, gamma_hshoes::Vector{Float64})
+    for i = 1:self.nElem
+        vel_wake = vind(hshoes, gamma_hshoes, self.ele[i].cp)
+        RHS[i] = dot(vinf + vel_wake, self.ele[i].ncap)
     end
 
-    return RHS
+    return -1 .* RHS
+end
+
+function vind(hshoes::Vector{Hshoe}, gamma_hshoes::Vector{Float64}, p::Vector{Float64})
+    vel = zeros(3)
+    for ihs = 1:length(hshoes)
+        vel += vind(hshoes[ihs], p) * gamma_hshoes[ihs]
+    end
+    return vel
 end
 
 function writeMesh(s::Surface, filename::String; vinf=zeros(3))
@@ -133,6 +165,22 @@ function writeMesh(s::Surface, filename::String; vinf=zeros(3))
         vtk["cp", VTKCellData()] = cp
         vtk["ncap", VTKCellData()] = ncap
         vtk["vel", VTKCellData()] = repeat(vinf, outer=(1, s.nElem))
+    end
+end
+
+function writeWake(hshoes, gamma_hshoes, filename)
+    n = length(hshoes)
+    xyz = zeros(3, 2, n+1, 1)
+
+    for i = 1:n
+        xyz[:, 1, i, 1] .= hshoes[i].p[:, 2]
+        xyz[:, 2, i, 1] .= hshoes[i].p[:, 1]
+    end
+    xyz[:, 1, n+1, 1] .= hshoes[n].p[:, 3]
+    xyz[:, 2, n+1, 1] .= hshoes[n].p[:, 4]
+
+    vtk_grid(filename, xyz) do vtk
+        vtk["gamma"] = gamma_hshoes
     end
 end
 
@@ -197,33 +245,58 @@ function getTE(s::Surface)
     return nodeList, cellsTE, cellsU, cellsL
 end
 
-function set_horseshoe_tail!(p1, p2, p3, p4; extend=10.0)
-    p1 = p2 .+ [extend*p2[1], 0.0, 0.0]
-    p4 = p3 .+ [extend*p3[1], 0.0, 0.0]
+function set_hshoe_tail!(p1, p2, p3, p4; extend=3.0)
+    p1 .= p2 .+ [extend*p2[1], 0.0, 0.0]
+    p4 .= p3 .+ [extend*p3[1], 0.0, 0.0]
 end
 
-function vind_horseshoe(s::Surface, nodeList)
-    p1 = zeros(3)
-    p2 = zeros(3)
-    p3 = zeros(3)
-    p4 = zeros(3)
+function get_hshoes(s::Surface; rc=1.0e-6)
+    nodeList, cellsTE, cellsU, cellsL = getTE(s)
+    hshoes = Vector{Hshoe}(undef, length(nodeList)-1)
 
-    # For each tail segment, set the horseshoe tail and gamma
-    for i=1:length(nodeList)-1
-        p2 .= s.mesh.points[nodeList[i]]
-        p3 .= s.mesh.points[nodeList[i+1]]
-        set_horseshoe_tail!(p1, p2, p3, p4)
+    for i = 1:length(nodeList)-1
+        p1 = zeros(3)
+        p2 = s.mesh.points[nodeList[i]]
+        p3 = s.mesh.points[nodeList[i+1]]
+        p4 = zeros(3)
+        set_hshoe_tail!(p1, p2, p3, p4)
+        hshoes[i] = Hshoe(p1, p2, p3, p4, rc)
     end
+    return hshoes, cellsU, cellsL
+end
 
-    # return vel
+function set!(gamma_hshoes::Vector{Float64}, s::Surface, cellsU, cellsL)
+    for i = 1:length(gamma_hshoes)
+        gamma_hshoes[i] = s.gamma[cellsU[i]] - s.gamma[cellsL[i]]
+    end
 end
 
 # Main program
 body = Surface("airfoil.stl")
-vinf = [1,0,0]
-RHS = getRHS(body, vinf)
-println("Computing solution ...")
+RHS = zeros(body.nElem)
+vinf = [1.0, 0, 0]
+hshoes, cellsU, cellsL = get_hshoes(body)
+gamma_hshoes = zeros(length(hshoes))
+
+# Initial iteration without wake
+set!(RHS, body, vinf, hshoes, gamma_hshoes)
 gamma = solve(body.aic, RHS; isClosed=body.isClosed)
 assignGamma!(body, gamma)
-nodeList, cellsTE, cellsU, cellsL = getTE(body)
+set!(gamma_hshoes, body, cellsU, cellsL)
+gamma_prev = gamma
+
+for iter = 1:50
+    set!(RHS, body, vinf, hshoes, gamma_hshoes)
+    gamma = solve(body.aic, RHS; isClosed=body.isClosed)
+    assignGamma!(body, gamma)
+    set!(gamma_hshoes, body, cellsU, cellsL)
+    residual = norm(gamma - gamma_prev)
+    println("Iter: $iter  Res: $residual")
+    gamma_prev .= gamma
+
+    if residual < 1e-6; break; end
+end
+
+println("Computing solution ...")
 writeMesh(body, "out"; vinf=vinf)
+writeWake(hshoes, gamma_hshoes, "out_wake")
