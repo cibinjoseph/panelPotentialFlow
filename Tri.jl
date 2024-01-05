@@ -107,7 +107,7 @@ function Surface(filename::String; rc=1e-6, isClosed=true, tol=1e-6)
     gamma = zeros(nElem)
 
     ele = Vector{Tri}(undef, nElem)
-    for i in 1:nElem
+    for i = 1:nElem
         ele[i] = Tri(mesh.points[mesh.cells[i]][1],
                      mesh.points[mesh.cells[i]][2],
                      mesh.points[mesh.cells[i]][3], rc)
@@ -116,8 +116,8 @@ function Surface(filename::String; rc=1e-6, isClosed=true, tol=1e-6)
     # Compute aic matrix
     aic = zeros(nElem, nElem)
 
-    for j in 1:nElem
-        for i in 1:nElem
+    for j = 1:nElem
+        for i = 1:nElem
             aic[i, j] = dot(vind(ele[j], ele[i].cp), ele[i].ncap)
         end
     end
@@ -126,8 +126,8 @@ function Surface(filename::String; rc=1e-6, isClosed=true, tol=1e-6)
 end
 
 function vind(self::Surface, p)
-    vel = 0.0
-    for i in range(1:self.nElem)
+    vel = zeros(3)
+    for i = 1:self.nElem
         vel += vind(self.ele[i], p) .* self.gamma[i]
     end
     return vel
@@ -136,10 +136,8 @@ end
 function set!(RHS::Vector{Float64}, self::Surface, vinf::Vector{Float64}, hshoes::Vector{Hshoe}, gamma_hshoes::Vector{Float64})
     for i = 1:self.nElem
         vel_wake = vind(hshoes, gamma_hshoes, self.ele[i].cp)
-        RHS[i] = dot(vinf + vel_wake, self.ele[i].ncap)
+        RHS[i] = -1 .* dot(vinf + vel_wake, self.ele[i].ncap)
     end
-
-    return -1 .* RHS
 end
 
 function vind(hshoes::Vector{Hshoe}, gamma_hshoes::Vector{Float64}, p::Vector{Float64})
@@ -150,21 +148,23 @@ function vind(hshoes::Vector{Hshoe}, gamma_hshoes::Vector{Float64}, p::Vector{Fl
     return vel
 end
 
-function writeMesh(s::Surface, filename::String; vinf=zeros(3))
+function writeMesh(s::Surface, filename::String, hshoes::Vector{Hshoe}, gamma_hshoes::Vector{Float64}; vinf=zeros(3))
     points, cells = getVTKElements(s.mesh)
     ncap = zeros(3, s.nElem)
     cp = zeros(3, s.nElem)
     id = 1:s.nElem
+    vel = zeros(3, s.nElem)
     for i = 1:s.nElem
         ncap[:, i] = s.ele[i].ncap
         cp[:, i] = s.ele[i].cp
+        vel[:, i] = vinf + vind(s, s.ele[i].cp) + vind(hshoes, gamma_hshoes, s.ele[i].cp)
     end
     vtk_grid(filename, points, cells) do vtk
         vtk["gamma"] = s.gamma
         vtk["cell_id"] = id
         vtk["cp", VTKCellData()] = cp
         vtk["ncap", VTKCellData()] = ncap
-        vtk["vel", VTKCellData()] = repeat(vinf, outer=(1, s.nElem))
+        vtk["vel", VTKCellData()] = vel
     end
 end
 
@@ -207,7 +207,7 @@ function getTE(s::Surface)
     # Find max x coordinate
     max_x = s.mesh.points[1][1]
     nodeList::Vector{Int} = []
-    for i in 1:np
+    for i = 1:np
         if s.mesh.points[i][1] > max_x
             max_x = s.mesh.points[i][1]
             nodeList = [i]
@@ -285,6 +285,7 @@ assignGamma!(body, gamma)
 set!(gamma_hshoes, body, cellsU, cellsL)
 gamma_prev = gamma
 
+# Iterate till wake and body strengths are converged
 for iter = 1:50
     set!(RHS, body, vinf, hshoes, gamma_hshoes)
     gamma = solve(body.aic, RHS; isClosed=body.isClosed)
@@ -298,5 +299,5 @@ for iter = 1:50
 end
 
 println("Computing solution ...")
-writeMesh(body, "out"; vinf=vinf)
+writeMesh(body, "out", hshoes, gamma_hshoes; vinf=vinf)
 writeWake(hshoes, gamma_hshoes, "out_wake")
