@@ -284,7 +284,7 @@ function setLocalVel!(s::Surface, hshoes::Vector{Hshoe}, gamma_hshoes::Vector{Fl
 end
 
 # Main program
-body = Surface("airfoil.stl")
+body = Surface("geometry/airfoil.stl"; isClosed=false)
 RHS = zeros(body.nElem)
 vinf = [1.0, 0, 0]
 hshoes, cellsU, cellsL = get_hshoes(body)
