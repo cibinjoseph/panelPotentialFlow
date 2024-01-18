@@ -90,7 +90,7 @@ function getTrailingNodes(s::Surface; Vinf_dir=[1.0, 0.0, 0.0], edgeAngleTol_deg
 end
 
 # Main program
-body = Surface("geometry/aircraft.stl")
+body = Surface("geometry/airfoil.stl")
 cellidx, edgeNodes = getTrailingNodes(body)
 body.isTrailing[cellidx] .= 1
 writeMesh(body, "edge")
